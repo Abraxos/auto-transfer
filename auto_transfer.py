@@ -21,7 +21,7 @@ from twisted.internet.protocol import ProcessProtocol
 
 ACCEPTED_EVENTS = ['attrib', 'moved_to']
 IGNORED_EVENTS = ['modify']
-PROGRESS_PATTERN = cmpl(r'\s+([\d,]+)\s+(\d\d?)\%\s+(.+s)\s+([\d\:]+).*')
+PROGRESS_PATTERN = cmpl(r'\s+([\d,]+)\s+(\d\d?\d?)\%\s+(.+s)\s+([\d\:]+).*')
 
 def generate_directory_section_mapping(configuration):
     return {bytes(configuration[section]['input_directory'], encoding='UTF-8') : section for section in configuration.sections()}
@@ -37,7 +37,7 @@ class RSyncProtocol(ProcessProtocol):
         self.log("Connection made...")
         self.transport.closeStdin() # tell them we're done
     def outReceived(self, data):
-        data = data.decode('UTF-8')
+        data = data.decode('UTF-8').replace('\r','').replace('\n','')
         m = PROGRESS_PATTERN.match(data)
         if m:
             self.log("SIZE: {} COMPLETE: {}% RATE: {} ETA: {}".format(m.group(1),m.group(2),m.group(3),m.group(4),))
@@ -74,7 +74,7 @@ def handle_new_file(config_section, filepath, dst_svr, dst_port, dst_dir, err_di
     print("[{}]: New File: {}".format(config_section, filepath))
     try:
         print("[{}][{}]: Sending to {}:{}{}".format(config_section, filename, dst_svr, dst_port, dst_dir))
-        cmd = ['rsync', '--progress', '-Parvzy', '-e', 'ssh -p {}'.format(dst_port), filepath, dst_svr + ':' + dst_dir]
+        cmd = ['rsync', '--progress', '-Parvzy', '--chmod=Du+w,Dugo+rx,Dgo-w,Fu+w,Fugo+r,Fgo-w,Fugo-x', '-e', 'ssh -p {}'.format(dst_port), filepath, dst_svr + ':' + dst_dir]
         # print("[{}][{}]: Executing: {}".format(config_section, filename, cmd))
         # call(cmd)
 

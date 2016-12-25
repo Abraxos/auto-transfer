@@ -21,7 +21,7 @@ from twisted.internet.protocol import ProcessProtocol
 
 ACCEPTED_EVENTS = ['attrib', 'moved_to']
 IGNORED_EVENTS = ['modify']
-PROGRESS_PATTERN = cmpl(r'\s+([\d,]+)\s+(\d\d?)\%\s+(.+s)\s+([\d\:]+)\s*')
+PROGRESS_PATTERN = cmpl(r'\s+([\d,]+)\s+(\d\d?)\%\s+(.+s)\s+([\d\:]+).*')
 
 def generate_directory_section_mapping(configuration):
     return {bytes(configuration[section]['input_directory'], encoding='UTF-8') : section for section in configuration.sections()}

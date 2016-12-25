@@ -22,7 +22,7 @@ Then you want to use `virtualenvwrapper` to create the development environment f
 
 ```
 $ mkvirtualenv -p /usr/bin/python3 auto-transfer
-(auto-converter) $
+(auto-transfer) $
 ```
 
 From now on, all commands in this document that are supposed to be executed from the virtual environment will be prefaced with `(auto-transfer) $` whereas any commands that should be executed outside of a virtual environment as a normal user will be prefaced with just `$` (root user commands will be prefaced with `#`).
@@ -30,7 +30,7 @@ From now on, all commands in this document that are supposed to be executed from
 Inside the virtual environment you need to install the following python packages:
 
 ```
-(auto-converter) $ pip install twisted
+(auto-transfer) $ pip install twisted
 ```
 
 ## Upcoming Features

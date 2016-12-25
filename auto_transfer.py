@@ -17,6 +17,7 @@ from twisted.python.filepath import FilePath
 from twisted.internet import reactor
 
 ACCEPTED_EVENTS = ['attrib', 'moved_to']
+IGNORED_EVENTS = ['modify']
 
 def generate_directory_section_mapping(configuration):
     return {bytes(configuration[section]['input_directory'], encoding='UTF-8') : section for section in configuration.sections()}
@@ -53,7 +54,8 @@ def on_directory_changed(_, filepath, mask):
     dst_port = CONFIG[config_section]['destination'].split(':')[1].split('/',1)[0]
     dst_dir = '/' + CONFIG[config_section]['destination'].split('/',1)[1]
     mask = humanReadableMask(mask)
-    print("Event {} on {}".format(mask, filepath))
+    if not any([a for a in mask if a in IGNORED_EVENTS]):
+        print("Event {} on {}".format(mask, filepath))
     if any([a for a in mask if a in ACCEPTED_EVENTS]):
         handle_new_file(config_section, filepath.path,
                         dst_svr, dst_port, dst_dir,

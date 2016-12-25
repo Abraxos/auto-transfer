@@ -51,7 +51,7 @@ $ sudo pip3 install twisted
 Once the pre-requisites are installed, you need to symlink the script to a directory in your path. For example:
 
 ```
-$ sudo ln -s /home/user/Repos/auto-converter/auto_transfer.py /usr/local/bin/auto-transfer
+$ sudo ln -s /home/user/Repos/auto-transfer/auto_transfer.py /usr/local/bin/auto-transfer
 ```
 
 ### Usage

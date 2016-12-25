@@ -62,6 +62,8 @@ Now to use the program, simply set up your configuration file (see examples dire
 $ auto-transfer /path/to/your/config.ini
 ```
 
+As of right now this program does not do SSH passwords and I have no plans to include this functionality. Therefore, access to the destination server using SSH Keys must be configured before this program becomes usable.
+
 As of right now it simply runs inside the shell and not as a daemon or service of any kind. I am considering how to set this up with sufficiently good logging so that I can view what's going on but not have to keep the shell open. For now, if you want to just keep running this consider using a program like Screen or Tmux.
 
 I personally use Tmux, and you can rather easily set up a session like so:

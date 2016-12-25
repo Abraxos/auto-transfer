@@ -3,6 +3,7 @@
 from os.path import dirname, join, basename, splitext
 from os import stat
 from os import remove as rm
+from os import listdir as ls
 from subprocess import check_output
 from subprocess import call
 from re import compile as cmpl
@@ -90,18 +91,21 @@ def handle_new_file(config_section, filepath, dst_svr, dst_port, dst_dir, err_di
         except Exception as e: # pylint: disable=W0703
             print("[{}][{}]: ERROR - Unable to move to error directory... ".format(config_section, filename))
 
-def on_directory_changed(_, filepath, mask):
+def handle_directory_change(filepath):
     config_section = DIRECTORY_TO_SECTION_MAP[dirname(filepath.path)]
     dst_svr = CONFIG[config_section]['destination'].split(':')[0]
-    dst_port = CONFIG[config_section]['destination'].split(':')[1].split('/',1)[0]
-    dst_dir = '/' + CONFIG[config_section]['destination'].split('/',1)[1]
+    dst_port = CONFIG[config_section]['destination'].split(':')[1].split('/', 1)[0]
+    dst_dir = '/' + CONFIG[config_section]['destination'].split('/', 1)[1]
+    handle_new_file(config_section, filepath.path,
+                    dst_svr, dst_port, dst_dir,
+                    CONFIG[config_section]['error_directory'])
+
+def on_directory_changed(_, filepath, mask):
     mask = humanReadableMask(mask)
     if not any([a for a in mask if a in IGNORED_EVENTS]):
         print("Event {} on {}".format(mask, filepath))
     if any([a for a in mask if a in ACCEPTED_EVENTS]):
-        handle_new_file(config_section, filepath.path,
-                        dst_svr, dst_port, dst_dir,
-                        CONFIG[config_section]['error_directory'])
+        handle_directory_change(filepath)
 
 if __name__ == '__main__':
     global DIRECTORY_TO_SECTION_MAP
@@ -124,8 +128,16 @@ if __name__ == '__main__':
 
     notifier = INotify()
     for section in CONFIG.sections():
-        notifier.watch(FilePath(CONFIG[section]['input_directory']),
+        input_dir = CONFIG[section]['input_directory']
+        dst_dir = CONFIG[section]['destination']
+        notifier.watch(FilePath(input_dir),
                        callbacks=[on_directory_changed])
-        print("[{}] Watching: {} --> {}".format(section, CONFIG[section]['input_directory'], CONFIG[section]['destination']))
+        print("[{}] Watching: {} --> {}".format(section, input_dir, dst_dir))
+
+        # Look for any existing files in the directory:
+        for f in ls(input_dir):
+            print("[{}] Pre-existing file detected: {}".format(section, f))
+            handle_directory_change(FilePath(bytes(join(input_dir, f),'UTF-8')))
     notifier.startReading()
+
     reactor.run() # pylint: disable=E1101

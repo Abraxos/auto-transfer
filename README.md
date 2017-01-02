@@ -1,6 +1,6 @@
 # Auto-Transfer
 
-A utility that can be configured to watch a set of media directories. Each input directory would have corresponding destination (most likely on a remote server), done, and error directories. When a file in placed in an input directory, it is sent to its destination. The original source file is placed in the done directory if it was properly converted, otherwise it is placed in the error directory. This utility primarily uses Twisted/iNotify to react to new files and `rsync/ssh` to send the files accross as needed.
+A utility that can be configured to watch a set of media directories. Each input directory would have corresponding destination (most likely on a remote server), done, and error directories. When a file in placed in an input directory, it is sent to its destination. The original source file is placed in the done directory if it was properly converted, otherwise it is placed in the error directory. This utility primarily uses Twisted/iNotify to react to new files and `rsync/ssh` to send the files across as needed.
 
 ## Development Setup
 
@@ -62,9 +62,11 @@ Now to use the program, simply set up your configuration file (see examples dire
 $ auto-transfer /path/to/your/config.ini
 ```
 
+This will make it so that any files and/or directories placed in the watched directory will be transferred to the destination automatically. Please note that only top-level files/directories will be given their own transfer stream. So, for example, if you place three files and a directory containing 100 files and subdirectories in the watched directory, there will be four separate rsync processes running as a result. The first three will be transferring the top-level files simultaneously and the fourth will be transferring the directory. Please understand that the fourth process will be responsible for transferring the entire directory and that each file/subdirectory will not receive its own process like they would if they were direct children of the watched directory. Any directories places inside the watched directory are treated as a single unit.
+
 As of right now this program does not do SSH passwords and I have no plans to include this functionality. Therefore, access to the destination server using SSH Keys must be configured before this program becomes usable.
 
-As of right now it simply runs inside the shell and not as a daemon or service of any kind. I am considering how to set this up with sufficiently good logging so that I can view what's going on but not have to keep the shell open. For now, if you want to just keep running this consider using a program like Screen or Tmux.
+The utility simply runs inside the shell and not as a daemon or service of any kind. I am considering how to set this up with sufficiently good logging so that I can view what's going on but not have to keep the shell open. For now, if you want to just keep running this consider using a program like Screen or Tmux.
 
 I personally use Tmux, and you can rather easily set up a session like so:
 
@@ -83,3 +85,17 @@ Now you can exit from the terminal, or just detach from the session (`[Ctrl] + B
 ```
 $ tmux attach-session -t auto-transfer
 ```
+
+#### Configuration
+
+The configuration should be defined inside of a .ini file and given to the executable when running the program. There are several unique things to be aware of inside the configuration:
+
++ The auto-transfer utility works based on configuration sections. Each section corresponds to a single input directory that is to be watched for changes, as well as its destination and error directories. There can be as many sections as you like, but their names need to be unique (see example)
++ There are several fields in each configuration section:
+  + `input_directory`: Should be set to an existing directory to watch.
+  + `destination`: Needs to be set to a destination, likely on a remote server using the following format: `<server>:<port>/path/to/destination/directory/`
+  ; can be either 'delete', 'move', or 'nothing'
+  + `on_complete`: Instructs the utility on what to do when the transfer is complete. There are three options as of right now: `delete`, `move`, and `nothing`. Be careful when using the delete option as the files will obviously be irreversibly deleted. If the `move` option is set, then the `completed_directory` field must be set in this section.
+  ; Enable completed directory if you want finished files moved there
+  + `completed_directory`: Should be set to an existing directory if `on_complete` is set to `move`. Otherwise can be ignored.
+  + `error_directory`: Should be set to an existing directory. This is where files that generate any kind of errors will end up.

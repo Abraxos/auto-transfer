@@ -1,15 +1,16 @@
 #!/usr/bin/python3
 
-from os.path import dirname, join, basename, splitext
+from os.path import dirname, join, basename, splitext, isfile
 from os import stat
-from os import remove as rm
 from os import listdir as ls
+from os import remove as rm
 from subprocess import check_output
 from subprocess import call
 from re import compile as cmpl
 from re import split
 import sys
 from shutil import move as mv
+from shutil import rmtree as rmr
 from traceback import print_exception
 from configparser import ConfigParser
 from argparse import ArgumentParser
@@ -56,19 +57,29 @@ class RSyncProtocol(ProcessProtocol):
     def processEnded(self, reason):
         self.log("Process ended, status %d" % (reason.value.exitCode,))
         self.log("Cleaning up...")
-        on_complete = CONFIG[self.config_section]['on_complete']
-        if on_complete == 'move':
-            done_dir = CONFIG[self.config_section]['completed_directory']
-            done = join(done_dir, self.filename)
-            self.log("Moving to: {}".format(done))
-            mv(self.filepath, done)
-        elif on_complete == 'delete':
-            self.log("Deleting...")
-            rm(self.filepath)
+        if reason.value.exitCode:
+            self.log("Error detected, moving contents to error directory...")
+            err_dir = CONFIG[self.config_section]['error_directory']
+            err = join(err_dir, self.filename)
+            mv(self.filepath, err)
+        else:
+            on_complete = CONFIG[self.config_section]['on_complete']
+            if on_complete == 'move':
+                done_dir = CONFIG[self.config_section]['completed_directory']
+                done = join(done_dir, self.filename)
+                self.log("Moving to: {}".format(done))
+                mv(self.filepath, done)
+            elif on_complete == 'delete':
+                self.log("Deleting...")
+                if isfile(self.filepath):
+                    rm(self.filepath)
+                else:
+                    rmr(self.filepath)
         self.log("Closing protocol... Done!")
         # reactor.stop()
 
 def handle_new_file(config_section, filepath, dst_svr, dst_port, dst_dir, err_dir):
+    if not dst_dir.endswith('/'): dst_dir += '/'
     filename = basename(filepath.decode('UTF-8'))
     err = join(err_dir, filename)
     print("[{}]: New File: {}".format(config_section, filepath))
@@ -79,7 +90,7 @@ def handle_new_file(config_section, filepath, dst_svr, dst_port, dst_dir, err_di
         # call(cmd)
 
         rsyncProto = RSyncProtocol(config_section, filepath)
-        reactor.spawnProcess(rsyncProto, "rsync", cmd, {})
+        reactor.spawnProcess(rsyncProto, "rsync", cmd, {}) # pylint: disable=E1101
 
     except Exception as e: # pylint: disable=W0703
         print("[{}][{}]: ERROR - {} --> {}:{}{}".format(config_section, filename, e, dst_svr, dst_port, dst_dir))

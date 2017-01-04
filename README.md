@@ -2,6 +2,8 @@
 
 A utility that can be configured to watch a set of media directories. Each input directory would have corresponding destination (most likely on a remote server), done, and error directories. When a file in placed in an input directory, it is sent to its destination. The original source file is placed in the done directory if it was properly converted, otherwise it is placed in the error directory. This utility primarily uses Twisted/iNotify to react to new files and `rsync/ssh` to send the files across as needed.
 
+The program includes an optional NCurses UI that is easier to view for humans rather than the normal STDOUT printouts the program typically uses. It is capable of detecting whether termbox is installed, and if it is, the program will use the NCurses UI, otherwise it will default to the printouts.
+
 ## Development Setup
 
 This project should be developed inside of a python virtualenv which means that you should install `virtualenvwrapper` and several other utilities required to build some of the packages.
@@ -33,9 +35,17 @@ Inside the virtual environment you need to install the following python packages
 (auto-transfer) $ pip install twisted
 ```
 
+### Termbox
+
+In order to run the NCurses GUI, you will also need to install termbox for python 3 from here: https://github.com/nsf/termbox. Simply download or clone the git repository. Inside there will be a `setup.py` file. Execute the following from inside your virtual environment:
+
+```
+(auto-transfer) $ python setup.py install
+```
+
 ## Upcoming Features
 
-An upcoming useful feature is to either write this to function as a service/daemon, or to use termbox and display nice-looking progress bars, or both.
+As of right now, the program runs either with an NCurses GUI or just as a standard commandline utility that prints to STDOUT (depending on whether termbox is installed). Another addition would be to allow it to run as a daemon/service.
 
 ## Installation/Usage
 
@@ -52,6 +62,14 @@ Once the pre-requisites are installed, you need to symlink the script to a direc
 
 ```
 $ sudo ln -s /home/user/Repos/auto-transfer/auto_transfer.py /usr/local/bin/auto-transfer
+```
+
+### Termbox
+
+In order to run the NCurses GUI, you will also need to install termbox for python 3 from here: https://github.com/nsf/termbox. Simply download or clone the git repository. Inside there will be a `setup.py` file. Execute the following from inside your virtual environment:
+
+```
+$ sudo python3 setup.py install
 ```
 
 ### Usage

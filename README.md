@@ -40,6 +40,7 @@ Inside the virtual environment you need to install the following python packages
 In order to run the NCurses GUI, you will also need to install termbox for python 3 from here: https://github.com/nsf/termbox. Simply download or clone the git repository. Inside there will be a `setup.py` file. Execute the following from inside your virtual environment:
 
 ```
+(auto-transfer) $ pip install cython
 (auto-transfer) $ python setup.py install
 ```
 
@@ -69,6 +70,7 @@ $ sudo ln -s /home/user/Repos/auto-transfer/auto_transfer.py /usr/local/bin/auto
 In order to run the NCurses GUI, you will also need to install termbox for python 3 from here: https://github.com/nsf/termbox. Simply download or clone the git repository. Inside there will be a `setup.py` file. Execute the following from inside your virtual environment:
 
 ```
+$ sudo pip3 install cython
 $ sudo python3 setup.py install
 ```
 

@@ -1,13 +1,13 @@
 #!/usr/bin/python3
 
-from os.path import dirname, join, basename, splitext, isfile
-from os import stat
+from os.path import dirname, join, basename, isfile
+# from os import stat
 from os import listdir as ls
 from os import remove as rm
-from subprocess import check_output
-from subprocess import call
+# from subprocess import check_output
+# from subprocess import call
 from re import compile as cmpl
-from re import split
+# from re import split
 import sys
 from shutil import move as mv
 from shutil import rmtree as rmr
@@ -21,11 +21,11 @@ from twisted.internet import reactor
 from twisted.internet.protocol import ProcessProtocol
 
 try:
-    import termbox
+    import termbox # pylint: disable=E0401
     from nc_process_display import NCProcessDisplay
     from twisted.internet.task import LoopingCall
     TERMBOX = True
-except:
+except ImportError:
     print("No Termbox installation detected, using standard printouts...")
     TERMBOX = False
 
@@ -34,6 +34,8 @@ IGNORED_EVENTS = ['modify']
 PROGRESS_PATTERN = cmpl(r'\s+([\d,]+)\s+(\d\d?\d?)\%\s+(.+s)\s+([\d\:]+).*')
 NEW_FILE_PATTERN = cmpl(r'\s*(.+\S)\s+([\d,]+)\s+(\d\d?\d?)\%\s+(.+s)\s+([\d\:]+).*')
 
+ACTIVE_PROCESSES = []
+
 def log(msg):
     if TERMBOX:
         NC_PROCESS_DISPLAY.log(msg)
@@ -41,14 +43,17 @@ def log(msg):
     else:
         print(msg)
 
-def generate_directory_section_mapping(configuration):
-    return {bytes(configuration[section]['input_directory'], encoding='UTF-8') : section for section in configuration.sections()}
+def generate_dir_section_mapping(configuration):
+    return {bytes(configuration[section]['input_directory'], encoding='UTF-8') \
+            : section for section in configuration.sections()}
 
 class RSyncProtocol(ProcessProtocol):
     def __init__(self, config_section, filepath):
+        global ACTIVE_PROCESSES
         self.config_section  = config_section
         self.filepath = filepath
         self.filename = basename(filepath.decode('UTF-8'))
+        ACTIVE_PROCESSES.append(self)
     def log(self, msg):
         log("[{}][{}]: {}".format(self.config_section, self.filename, msg))
     def connectionMade(self):
@@ -58,7 +63,8 @@ class RSyncProtocol(ProcessProtocol):
         data = data.decode('UTF-8').replace('\r','').replace('\n','')
         m = PROGRESS_PATTERN.match(data)
         if m:
-            status = "SIZE: {} COMPLETE: {}% RATE: {} ETA: {}".format(m.group(1),m.group(2),m.group(3),m.group(4))
+            status = "SIZE: {} COMPLETE: {}% RATE: {} ETA: {}"\
+                     .format(m.group(1),m.group(2),m.group(3),m.group(4))
             if TERMBOX:
                 NC_PROCESS_DISPLAY.update_progress_bar('[{}][{}]'.format(self.config_section, self.filename),
                                                        int(m.group(2)),
@@ -69,12 +75,12 @@ class RSyncProtocol(ProcessProtocol):
         else:
             m = NEW_FILE_PATTERN.match(data)
             if m:
-                status = "SIZE: {} COMPLETE: {}% RATE: {} ETA: {}".format(m.group(2),m.group(3),m.group(4),m.group(5))
+                status = "FILE: {} SIZE: {} COMPLETE: {}% RATE: {} ETA: {}".format(m.group(1), m.group(2),m.group(3),m.group(4),m.group(5))
                 if TERMBOX:
                     NC_PROCESS_DISPLAY.update_progress_bar('[{}][{}]'.format(self.config_section, self.filename),
                                                            int(m.group(3)),
                                                            status,
-                                                           m.group(1))
+                                                           '[{}][{}]: {}'.format(self.config_section, self.filename, m.group(1)))
                     NC_PROCESS_DISPLAY.draw()
                 else:
                     self.log(status)
@@ -91,6 +97,7 @@ class RSyncProtocol(ProcessProtocol):
     def processExited(self, reason):
         self.log("Process exited, status %d" % (reason.value.exitCode,))
     def processEnded(self, reason):
+        global ACTIVE_PROCESSES
         self.log("Process ended, status %d" % (reason.value.exitCode,))
         self.log("Cleaning up...")
         if TERMBOX:
@@ -113,14 +120,14 @@ class RSyncProtocol(ProcessProtocol):
                     try:
                         rm(self.filepath)
                     except:
-                        self.log("WARNING: Unable to delete file for some reason...")
+                        self.log("WARNING: Unable to delete file...")
                 else:
                     try:
                         rmr(self.filepath)
                     except:
-                        self.log("WARNING: Unable to delete directory for some reason...")
+                        self.log("WARNING: Unable to delete directory...")
+        ACTIVE_PROCESSES.remove(self)
         self.log("Closing protocol... Done!")
-        # reactor.stop()
 
 def handle_new_file(config_section, filepath, dst_svr, dst_port, dst_dir, err_dir):
     if not dst_dir.endswith('/'): dst_dir += '/'
@@ -165,20 +172,26 @@ def on_directory_changed(_, filepath, mask):
         handle_directory_change(filepath)
 
 def check_for_exit():
-    event = NC_PROCESS_DISPLAY.tb.peek_event(1)
-    if event:
-        event_type, character, key  = event[:3]
-        if key == termbox.KEY_CTRL_Q or key == termbox.KEY_CTRL_C:
-            NC_PROCESS_DISPLAY.tb.clear()
-            reactor.stop() # pylint: disable=E1101
-            print("Exit key pressed")
-            exit(0)
+    if TERMBOX:
+        event = NC_PROCESS_DISPLAY.tb.peek_event(1)
+        if event:
+            key  = event[2]
+            if key == termbox.KEY_CTRL_Q or key == termbox.KEY_CTRL_C:
+                for process_protocol in ACTIVE_PROCESSES:
+                    process_protocol.transport.signalProcess('KILL')
+                reactor.stop() # pylint: disable=E1101
+                NC_PROCESS_DISPLAY.tb.clear()
+                NC_PROCESS_DISPLAY.tb.shutdown()
+                print("Exit key pressed")
+
+def update_display():
+    if TERMBOX:
+        NC_PROCESS_DISPLAY.draw()
 
 if __name__ == '__main__':
     global DIRECTORY_TO_SECTION_MAP
     global CONFIG
-    if TERMBOX:
-        global NC_PROCESS_DISPLAY
+    if TERMBOX: global NC_PROCESS_DISPLAY
 
     arg_parser = ArgumentParser(description='A utility that can be configured \
                                              to watch a set of directories for \
@@ -193,13 +206,17 @@ if __name__ == '__main__':
 
     CONFIG = ConfigParser()
     CONFIG.read(args.configuration_file)
-    DIRECTORY_TO_SECTION_MAP = generate_directory_section_mapping(CONFIG)
+    DIRECTORY_TO_SECTION_MAP = generate_dir_section_mapping(CONFIG)
+
     if TERMBOX:
         NC_PROCESS_DISPLAY = NCProcessDisplay()
-        l = LoopingCall(check_for_exit)
-        l.start(0.1) # call every tenth of a second
+        check_for_exit_loop = LoopingCall(check_for_exit)
+        check_for_exit_loop.start(0.1) # call every tenth of a second
+        update_screen_loop = LoopingCall(update_display)
+        update_screen_loop.start(1) # call every second
 
     notifier = INotify()
+    notifier.startReading()
     for section in CONFIG.sections():
         input_dir = CONFIG[section]['input_directory']
         dst_dir = CONFIG[section]['destination']
@@ -211,6 +228,6 @@ if __name__ == '__main__':
         for f in ls(input_dir):
             log("[{}] Pre-existing file detected: {}".format(section, f))
             handle_directory_change(FilePath(bytes(join(input_dir, f),'UTF-8')))
-    notifier.startReading()
 
+    notifier.startReading()
     reactor.run() # pylint: disable=E1101

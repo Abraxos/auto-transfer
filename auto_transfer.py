@@ -224,10 +224,13 @@ if __name__ == '__main__':
                        callbacks=[on_directory_changed])
         log("[{}] Watching: {} --> {}".format(section, input_dir, dst_dir))
 
-        # Look for any existing files in the directory:
-        for f in ls(input_dir):
-            log("[{}] Pre-existing file detected: {}".format(section, f))
-            handle_directory_change(FilePath(bytes(join(input_dir, f),'UTF-8')))
+        # Check if "on_complete" is set to something other than "nothing"
+        if ('on_complete' in CONFIG[section] and \
+            CONFIG[section]['on_complete'] != "nothing"):
+            # Look for any existing files in the directory
+            for f in ls(input_dir):
+                log("[{}] Pre-existing file detected: {}".format(section, f))
+                handle_directory_change(FilePath(bytes(join(input_dir, f),'UTF-8')))
 
     notifier.startReading()
     reactor.run() # pylint: disable=E1101

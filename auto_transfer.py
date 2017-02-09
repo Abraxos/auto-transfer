@@ -19,11 +19,11 @@ from twisted.internet.inotify import INotify, humanReadableMask
 from twisted.python.filepath import FilePath
 from twisted.internet import reactor
 from twisted.internet.protocol import ProcessProtocol
+from twisted.internet.task import LoopingCall
 
 try:
-    import termbox # pylint: disable=E0401
+    import termbox
     from nc_process_display import NCProcessDisplay
-    from twisted.internet.task import LoopingCall
     TERMBOX = True
 except ImportError:
     print("No Termbox installation detected, using standard printouts...")
@@ -34,7 +34,11 @@ IGNORED_EVENTS = ['modify']
 PROGRESS_PATTERN = cmpl(r'\s+([\d,]+)\s+(\d\d?\d?)\%\s+(.+s)\s+([\d\:]+).*')
 NEW_FILE_PATTERN = cmpl(r'\s*(.+\S)\s+([\d,]+)\s+(\d\d?\d?)\%\s+(.+s)\s+([\d\:]+).*')
 
-ACTIVE_PROCESSES = []
+PROGRAM_NAME = 'auto-transfer'
+MAX_SIMULTANEOUS_TRANSFERS = 'max_simultaneous_transfers'
+
+CONFIG = ConfigParser()
+NC_PROCESS_DISPLAY = NCProcessDisplay()
 
 def log(msg):
     if TERMBOX:
@@ -43,44 +47,50 @@ def log(msg):
     else:
         print(msg)
 
+def media_sections(config):
+    return [s for s in config.sections() if s != PROGRAM_NAME]
+
 def generate_dir_section_mapping(configuration):
     return {bytes(configuration[section]['input_directory'], encoding='UTF-8') \
-            : section for section in configuration.sections()}
+            : section for section in media_sections(configuration)}
 
 class RSyncProtocol(ProcessProtocol):
-    def __init__(self, config_section, filepath):
-        global ACTIVE_PROCESSES
-        self.config_section  = config_section
+    def __init__(self, config_section, filepath, queue):
+        self.config_section = config_section
         self.filepath = filepath
         self.filename = basename(filepath.decode('UTF-8'))
-        ACTIVE_PROCESSES.append(self)
+        self.queue = queue
+        self.queue.running(self)
     def log(self, msg):
         log("[{}][{}]: {}".format(self.config_section, self.filename, msg))
     def connectionMade(self):
         self.log("Connection made...")
         self.transport.closeStdin() # tell them we're done
     def outReceived(self, data):
-        data = data.decode('UTF-8').replace('\r','').replace('\n','')
-        m = PROGRESS_PATTERN.match(data)
-        if m:
+        data = data.decode('UTF-8').replace('\r', '').replace('\n', '')
+        match = PROGRESS_PATTERN.match(data)
+        if match:
             status = "SIZE: {} COMPLETE: {}% RATE: {} ETA: {}"\
-                     .format(m.group(1),m.group(2),m.group(3),m.group(4))
+                     .format(match.group(1), match.group(2), match.group(3),
+                             match.group(4))
             if TERMBOX:
                 NC_PROCESS_DISPLAY.update_progress_bar('[{}][{}]'.format(self.config_section, self.filename),
-                                                       int(m.group(2)),
+                                                       int(match.group(2)),
                                                        status)
                 NC_PROCESS_DISPLAY.draw()
             else:
                 self.log(status)
         else:
-            m = NEW_FILE_PATTERN.match(data)
-            if m:
-                status = "FILE: {} SIZE: {} COMPLETE: {}% RATE: {} ETA: {}".format(m.group(1), m.group(2),m.group(3),m.group(4),m.group(5))
+            match = NEW_FILE_PATTERN.match(data)
+            if match:
+                status = "FILE: {} SIZE: {} COMPLETE: {}% RATE: {} ETA: {}"\
+                         .format(match.group(1), match.group(2), match.group(3),
+                                 match.group(4), match.group(5))
                 if TERMBOX:
                     NC_PROCESS_DISPLAY.update_progress_bar('[{}][{}]'.format(self.config_section, self.filename),
-                                                           int(m.group(3)),
+                                                           int(match.group(3)),
                                                            status,
-                                                           '[{}][{}]: {}'.format(self.config_section, self.filename, m.group(1)))
+                                                           '[{}][{}]: {}'.format(self.config_section, self.filename, match.group(1)))
                     NC_PROCESS_DISPLAY.draw()
                 else:
                     self.log(status)
@@ -97,7 +107,6 @@ class RSyncProtocol(ProcessProtocol):
     def processExited(self, reason):
         self.log("Process exited, status %d" % (reason.value.exitCode,))
     def processEnded(self, reason):
-        global ACTIVE_PROCESSES
         self.log("Process ended, status %d" % (reason.value.exitCode,))
         self.log("Cleaning up...")
         if TERMBOX:
@@ -119,17 +128,19 @@ class RSyncProtocol(ProcessProtocol):
                 if isfile(self.filepath):
                     try:
                         rm(self.filepath)
-                    except:
+                    except: # pylint: disable=W0702
                         self.log("WARNING: Unable to delete file...")
                 else:
                     try:
                         rmr(self.filepath)
-                    except:
+                    except: # pylint: disable=W0702
                         self.log("WARNING: Unable to delete directory...")
-        ACTIVE_PROCESSES.remove(self)
         self.log("Closing protocol... Done!")
+        self.queue.done(self)
 
-def handle_new_file(config_section, filepath, dst_svr, dst_port, dst_dir, err_dir):
+
+def handle_new_file(config_section, filepath, dst_svr, dst_port, dst_dir,
+                    err_dir, queue):
     if not dst_dir.endswith('/'): dst_dir += '/'
     filename = basename(filepath.decode('UTF-8'))
     if TERMBOX:
@@ -140,11 +151,11 @@ def handle_new_file(config_section, filepath, dst_svr, dst_port, dst_dir, err_di
         log("[{}][{}]: Sending to {}:{}{}".format(config_section, filename, dst_svr, dst_port, dst_dir))
         cmd = ['rsync', '--progress', '-Parvzy', '--chmod=Du+w,Dugo+rx,Dgo-w,Fu+w,Fugo+r,Fgo-w,Fugo-x', '-e', 'ssh -p {}'.format(dst_port), filepath, dst_svr + ':' + dst_dir]
 
-        rsyncProto = RSyncProtocol(config_section, filepath)
-        reactor.spawnProcess(rsyncProto, "rsync", cmd, {}) # pylint: disable=E1101
+        rsync_protocol = RSyncProtocol(config_section, filepath, queue)
+        reactor.spawnProcess(rsync_protocol, "rsync", cmd, {}) # pylint: disable=E1101
 
-    except Exception as e: # pylint: disable=W0703
-        log("[{}][{}]: ERROR - {} --> {}:{}{}".format(config_section, filename, e, dst_svr, dst_port, dst_dir))
+    except Exception as exc: # pylint: disable=W0703
+        log("[{}][{}]: ERROR - {} --> {}:{}{}".format(config_section, filename, exc, dst_svr, dst_port, dst_dir))
         if TERMBOX:
             NC_PROCESS_DISPLAY.remove_progress_bar('[{}][{}]'.format(config_section, filename))
         exc_info = sys.exc_info()
@@ -152,32 +163,51 @@ def handle_new_file(config_section, filepath, dst_svr, dst_port, dst_dir, err_di
         try:
             mv(filepath, err)
             # pass
-        except Exception as e: # pylint: disable=W0703
+        except Exception as exc: # pylint: disable=W0703
             log("[{}][{}]: ERROR - Unable to move to error directory... ".format(config_section, filename))
 
-def handle_directory_change(filepath):
-    config_section = DIRECTORY_TO_SECTION_MAP[dirname(filepath.path)]
-    dst_svr = CONFIG[config_section]['destination'].split(':')[0]
-    dst_port = CONFIG[config_section]['destination'].split(':')[1].split('/', 1)[0]
-    dst_dir = '/' + CONFIG[config_section]['destination'].split('/', 1)[1]
-    handle_new_file(config_section, filepath.path,
-                    dst_svr, dst_port, dst_dir,
-                    CONFIG[config_section]['error_directory'])
+class TaskQueue(object):
+    def __init__(self, max_transfers):
+        self.max_transfers = max_transfers
+        self.queue = []
+        self.active = set([])
+    def enqueue_task(self, filepath):
+        log('Enqueueing({}): {}'.format(len(self.queue), filepath))
+        self.queue.append(filepath)
+        self.execute_next_task()
+    def execute_next_task(self):
+        if len(self.active) < self.max_transfers and self.queue:
+            filepath = self.queue.pop(0)
+            self.handle_directory_change(filepath)
+    def running(self, protocol):
+        self.active.add(protocol)
+    def done(self, protocol):
+        self.active.remove(protocol)
+        self.execute_next_task()
+    def handle_directory_change(self, filepath):
+        config_section = DIRECTORY_TO_SECTION_MAP[dirname(filepath.path)]
+        dst_svr = CONFIG[config_section]['destination'].split(':')[0]
+        dst_port = CONFIG[config_section]['destination'].split(':')[1].split('/', 1)[0]
+        dst_dir = '/' + CONFIG[config_section]['destination'].split('/', 1)[1]
+        handle_new_file(config_section, filepath.path,
+                        dst_svr, dst_port, dst_dir,
+                        CONFIG[config_section]['error_directory'],
+                        self)
 
 def on_directory_changed(_, filepath, mask):
     mask = humanReadableMask(mask)
     if not any([a for a in mask if a in IGNORED_EVENTS]):
         log("Event {} on {}".format(mask, filepath))
     if any([a for a in mask if a in ACCEPTED_EVENTS]):
-        handle_directory_change(filepath)
+        QUEUE.enqueue_task(filepath)
 
 def check_for_exit():
     if TERMBOX:
         event = NC_PROCESS_DISPLAY.tb.peek_event(1)
         if event:
-            key  = event[2]
-            if key == termbox.KEY_CTRL_Q or key == termbox.KEY_CTRL_C:
-                for process_protocol in ACTIVE_PROCESSES:
+            key = event[2]
+            if key == termbox.KEY_CTRL_Q or key == termbox.KEY_CTRL_C: # pylint: disable=E1101
+                for process_protocol in QUEUE.active:
                     process_protocol.transport.signalProcess('KILL')
                 reactor.stop() # pylint: disable=E1101
                 NC_PROCESS_DISPLAY.tb.clear()
@@ -189,48 +219,46 @@ def update_display():
         NC_PROCESS_DISPLAY.draw()
 
 if __name__ == '__main__':
-    global DIRECTORY_TO_SECTION_MAP
-    global CONFIG
-    if TERMBOX: global NC_PROCESS_DISPLAY
-
-    arg_parser = ArgumentParser(description='A utility that can be configured \
+    ARG_PARSER = ArgumentParser(description='A utility that can be configured \
                                              to watch a set of directories for \
                                              new files and when a new file \
                                              appears, it will be automatically \
                                              transferred to a pre-configured \
                                              destination')
-    arg_parser.add_argument('configuration_file', help='An INI format \
+    ARG_PARSER.add_argument('configuration_file', help='An INI format \
                             configuration file detailing the directories to be \
                             watched and their destinations.')
-    args = arg_parser.parse_args()
+    ARGS = ARG_PARSER.parse_args()
 
-    CONFIG = ConfigParser()
-    CONFIG.read(args.configuration_file)
+
+    CONFIG.read(ARGS.configuration_file)
     DIRECTORY_TO_SECTION_MAP = generate_dir_section_mapping(CONFIG)
 
     if TERMBOX:
-        NC_PROCESS_DISPLAY = NCProcessDisplay()
-        check_for_exit_loop = LoopingCall(check_for_exit)
-        check_for_exit_loop.start(0.1) # call every tenth of a second
-        update_screen_loop = LoopingCall(update_display)
-        update_screen_loop.start(1) # call every second
+        CHECK_FOR_EXIT_LOOP = LoopingCall(check_for_exit)
+        CHECK_FOR_EXIT_LOOP.start(0.1) # call every tenth of a second
+        UPDATE_SCREEN_LOOP = LoopingCall(update_display)
+        UPDATE_SCREEN_LOOP.start(1) # call every second
 
-    notifier = INotify()
-    notifier.startReading()
-    for section in CONFIG.sections():
+    QUEUE = TaskQueue(int(CONFIG[PROGRAM_NAME][MAX_SIMULTANEOUS_TRANSFERS]))
+
+    NOTIFIER = INotify()
+    NOTIFIER.startReading()
+
+    for section in media_sections(CONFIG):
         input_dir = CONFIG[section]['input_directory']
-        dst_dir = CONFIG[section]['destination']
-        notifier.watch(FilePath(input_dir),
+        dst = CONFIG[section]['destination']
+        NOTIFIER.watch(FilePath(input_dir),
                        callbacks=[on_directory_changed])
-        log("[{}] Watching: {} --> {}".format(section, input_dir, dst_dir))
+        log("[{}] Watching: {} --> {}".format(section, input_dir, dst))
 
         # Check if "on_complete" is set to something other than "nothing"
-        if ('on_complete' in CONFIG[section] and \
-            CONFIG[section]['on_complete'] != "nothing"):
+        if 'on_complete' in CONFIG[section] and \
+            CONFIG[section]['on_complete'] != "nothing":
             # Look for any existing files in the directory
             for f in ls(input_dir):
                 log("[{}] Pre-existing file detected: {}".format(section, f))
-                handle_directory_change(FilePath(bytes(join(input_dir, f),'UTF-8')))
+                QUEUE.enqueue_task(FilePath(bytes(join(input_dir, f), 'UTF-8')))
 
-    notifier.startReading()
+    NOTIFIER.startReading()
     reactor.run() # pylint: disable=E1101

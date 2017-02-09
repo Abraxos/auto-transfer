@@ -119,3 +119,5 @@ The configuration should be defined inside of a .ini file and given to the execu
   ; Enable completed directory if you want finished files moved there
   + `completed_directory`: Should be set to an existing directory if `on_complete` is set to `move`. Otherwise can be ignored.
   + `error_directory`: Should be set to an existing directory. This is where files that generate any kind of errors will end up.
++ There are a few fields that are global in scope, these are stored in the `[auto-transfer]` section, named after the program:
+  + `max_simultaneous_transfers`: This setting governs the maximum number of transfers that can occur simultaneously. Beyond that number, transfers will be enqueued and executed when their turn comes.

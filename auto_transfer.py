@@ -59,14 +59,17 @@ class RSyncProtocol(ProcessProtocol):
         self.config_section = config_section
         self.filepath = filepath
         self.filename = basename(filepath.decode('UTF-8'))
+        self.active = True
         self.queue = queue
         self.queue.running(self)
     def log(self, msg):
         log("[{}][{}]: {}".format(self.config_section, self.filename, msg))
     def connectionMade(self):
         self.log("Connection made...")
+        self.active = True
         self.transport.closeStdin() # tell them we're done
     def outReceived(self, data):
+        self.active = True
         data = data.decode('UTF-8').replace('\r', '').replace('\n', '')
         match = PROGRESS_PATTERN.match(data)
         if match:
@@ -104,8 +107,10 @@ class RSyncProtocol(ProcessProtocol):
         self.log("RSync process closed their STDOUT")
     def errConnectionLost(self):
         self.log("RSync process closed their STDERR")
+
     def processExited(self, reason):
         self.log("Process exited, status %d" % (reason.value.exitCode,))
+        self.active = False
     def processEnded(self, reason):
         self.log("Process ended, status %d" % (reason.value.exitCode,))
         self.log("Cleaning up...")
@@ -136,6 +141,7 @@ class RSyncProtocol(ProcessProtocol):
                     except: # pylint: disable=W0702
                         self.log("WARNING: Unable to delete directory...")
         self.log("Closing protocol... Done!")
+        self.active = False
         self.queue.done(self)
 
 
@@ -176,7 +182,8 @@ class TaskQueue(object):
         self.queue.append(filepath)
         self.execute_next_task()
     def execute_next_task(self):
-        if len(self.active) < self.max_transfers and self.queue:
+        [self.active.remove(protocol) for protocol in self.active if not protocol.active]
+        while len(self.active) < self.max_transfers and self.queue:
             filepath = self.queue.pop(0)
             self.handle_directory_change(filepath)
     def running(self, protocol):
@@ -191,8 +198,7 @@ class TaskQueue(object):
         dst_dir = '/' + CONFIG[config_section]['destination'].split('/', 1)[1]
         handle_new_file(config_section, filepath.path,
                         dst_svr, dst_port, dst_dir,
-                        CONFIG[config_section]['error_directory'],
-                        self)
+                        CONFIG[config_section]['error_directory'], self)
 
 def on_directory_changed(_, filepath, mask):
     mask = humanReadableMask(mask)

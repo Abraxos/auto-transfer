@@ -182,7 +182,6 @@ class TaskQueue(object):
         self.queue.append(filepath)
         self.execute_next_task()
     def execute_next_task(self):
-        [self.active.remove(protocol) for protocol in self.active if not protocol.active]
         while len(self.active) < self.max_transfers and self.queue:
             filepath = self.queue.pop(0)
             self.handle_directory_change(filepath)

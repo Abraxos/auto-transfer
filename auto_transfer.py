@@ -20,6 +20,7 @@ from twisted.python.filepath import FilePath
 from twisted.internet import reactor
 from twisted.internet.protocol import ProcessProtocol
 from twisted.internet.task import LoopingCall
+from twisted.internet.defer import DeferredLock
 
 try:
     import termbox
@@ -177,19 +178,32 @@ class TaskQueue(object):
         self.max_transfers = max_transfers
         self.queue = []
         self.active = set([])
+        self._queue_lock = DeferredLock()
+        self._active_set_lock = DeferredLock()
+
     def enqueue_task(self, filepath):
+        return self._queue_lock.run(self._enqueue_task, filepath)
+
+    def _enqueue_task(self, filepath):
         log('Enqueueing({}): {}'.format(len(self.queue), filepath))
         self.queue.append(filepath)
-        self.execute_next_task()
+        self._execute_next_task()
+
     def execute_next_task(self):
+        return self._queue_lock.run(self._execute_next_task)
+
+    def _execute_next_task(self):
         while len(self.active) < self.max_transfers and self.queue:
             filepath = self.queue.pop(0)
             self.handle_directory_change(filepath)
+
     def running(self, protocol):
-        self.active.add(protocol)
+        return self._active_set_lock.run(self.active.add, protocol)
+
     def done(self, protocol):
-        self.active.remove(protocol)
-        self.execute_next_task()
+        self._active_set_lock.run(self.active.remove, protocol)
+        return self.execute_next_task()
+
     def handle_directory_change(self, filepath):
         config_section = DIRECTORY_TO_SECTION_MAP[dirname(filepath.path)]
         dst_svr = CONFIG[config_section]['destination'].split(':')[0]
@@ -206,17 +220,21 @@ def on_directory_changed(_, filepath, mask):
     if any([a for a in mask if a in ACCEPTED_EVENTS]):
         QUEUE.enqueue_task(filepath)
 
+def shutdown():
+    for process_protocol in QUEUE.active:
+        process_protocol.transport.signalProcess('KILL')
+    reactor.stop() # pylint: disable=E1101
+    if TERMBOX:
+        NC_PROCESS_DISPLAY.tb.clear()
+        NC_PROCESS_DISPLAY.tb.shutdown()
+
 def check_for_exit():
     if TERMBOX:
         event = NC_PROCESS_DISPLAY.tb.peek_event(1)
         if event:
             key = event[2]
             if key == termbox.KEY_CTRL_Q or key == termbox.KEY_CTRL_C: # pylint: disable=E1101
-                for process_protocol in QUEUE.active:
-                    process_protocol.transport.signalProcess('KILL')
-                reactor.stop() # pylint: disable=E1101
-                NC_PROCESS_DISPLAY.tb.clear()
-                NC_PROCESS_DISPLAY.tb.shutdown()
+                shutdown()
                 print("Exit key pressed")
 
 def update_display():
@@ -224,46 +242,50 @@ def update_display():
         NC_PROCESS_DISPLAY.draw()
 
 if __name__ == '__main__':
-    ARG_PARSER = ArgumentParser(description='A utility that can be configured \
-                                             to watch a set of directories for \
-                                             new files and when a new file \
-                                             appears, it will be automatically \
-                                             transferred to a pre-configured \
-                                             destination')
-    ARG_PARSER.add_argument('configuration_file', help='An INI format \
-                            configuration file detailing the directories to be \
-                            watched and their destinations.')
-    ARGS = ARG_PARSER.parse_args()
+    try:
+        ARG_PARSER = ArgumentParser(description='A utility that can be configured \
+                                                 to watch a set of directories for \
+                                                 new files and when a new file \
+                                                 appears, it will be automatically \
+                                                 transferred to a pre-configured \
+                                                 destination')
+        ARG_PARSER.add_argument('configuration_file', help='An INI format \
+                                configuration file detailing the directories to be \
+                                watched and their destinations.')
+        ARGS = ARG_PARSER.parse_args()
 
 
-    CONFIG.read(ARGS.configuration_file)
-    DIRECTORY_TO_SECTION_MAP = generate_dir_section_mapping(CONFIG)
+        CONFIG.read(ARGS.configuration_file)
+        DIRECTORY_TO_SECTION_MAP = generate_dir_section_mapping(CONFIG)
 
-    if TERMBOX:
-        CHECK_FOR_EXIT_LOOP = LoopingCall(check_for_exit)
-        CHECK_FOR_EXIT_LOOP.start(0.1) # call every tenth of a second
-        UPDATE_SCREEN_LOOP = LoopingCall(update_display)
-        UPDATE_SCREEN_LOOP.start(1) # call every second
+        if TERMBOX:
+            CHECK_FOR_EXIT_LOOP = LoopingCall(check_for_exit)
+            CHECK_FOR_EXIT_LOOP.start(0.1) # call every tenth of a second
+            UPDATE_SCREEN_LOOP = LoopingCall(update_display)
+            UPDATE_SCREEN_LOOP.start(1) # call every second
 
-    QUEUE = TaskQueue(int(CONFIG[PROGRAM_NAME][MAX_SIMULTANEOUS_TRANSFERS]))
+        QUEUE = TaskQueue(int(CONFIG[PROGRAM_NAME][MAX_SIMULTANEOUS_TRANSFERS]))
 
-    NOTIFIER = INotify()
-    NOTIFIER.startReading()
+        NOTIFIER = INotify()
+        NOTIFIER.startReading()
 
-    for section in media_sections(CONFIG):
-        input_dir = CONFIG[section]['input_directory']
-        dst = CONFIG[section]['destination']
-        NOTIFIER.watch(FilePath(input_dir),
-                       callbacks=[on_directory_changed])
-        log("[{}] Watching: {} --> {}".format(section, input_dir, dst))
+        for section in media_sections(CONFIG):
+            input_dir = CONFIG[section]['input_directory']
+            dst = CONFIG[section]['destination']
+            NOTIFIER.watch(FilePath(input_dir),
+                           callbacks=[on_directory_changed])
+            log("[{}] Watching: {} --> {}".format(section, input_dir, dst))
 
-        # Check if "on_complete" is set to something other than "nothing"
-        if 'on_complete' in CONFIG[section] and \
-            CONFIG[section]['on_complete'] != "nothing":
-            # Look for any existing files in the directory
-            for f in ls(input_dir):
-                log("[{}] Pre-existing file detected: {}".format(section, f))
-                QUEUE.enqueue_task(FilePath(bytes(join(input_dir, f), 'UTF-8')))
+            # Check if "on_complete" is set to something other than "nothing"
+            if 'on_complete' in CONFIG[section] and \
+                CONFIG[section]['on_complete'] != "nothing":
+                # Look for any existing files in the directory
+                for f in ls(input_dir):
+                    log("[{}] Pre-existing file detected: {}".format(section, f))
+                    QUEUE.enqueue_task(FilePath(bytes(join(input_dir, f), 'UTF-8')))
 
-    NOTIFIER.startReading()
-    reactor.run() # pylint: disable=E1101
+        NOTIFIER.startReading()
+        reactor.run() # pylint: disable=E1101
+    except KeyboardInterrupt:
+        print("Termination signal received. Exiting...")
+        shutdown()

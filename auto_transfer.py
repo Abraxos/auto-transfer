@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 from os.path import dirname, join, basename, isfile
 # from os import stat
